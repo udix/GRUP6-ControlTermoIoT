@@ -22,6 +22,16 @@ bool man_control = false;
 bool man_value = false;
 float temperature = 0;
 
+
+//vars for relay push button
+
+int pbuttonPin = 2;// connect output to push button
+int relayPin = 10;// Connected to relay (LED)
+int val = 0; // push value from pin 2
+int lightON = 0;//light status
+int pushed = 0;//push status
+
+
 WiFiSSLClient net;
 MQTTClient mqttClient;
 
@@ -101,8 +111,35 @@ void messageReceived(String &topic, String &payload)
 
 }
 
+
+void manualactivation(){
+  val = digitalRead(pbuttonPin);
+  if(val == HIGH && lightON == LOW){
+    pushed = 1-pushed;
+    delay(100);
+  }    
+
+  lightON = val;
+      if(pushed == HIGH){
+        Serial.println("Light ON");
+        digitalWrite(relayPin, LOW); 
+       
+      }else{
+        Serial.println("Light OFF");
+        digitalWrite(relayPin, HIGH);
+   
+      }     
+
+  delay(100);
+  }
+
 void setup()
 {
+    //init push button ON,OFF
+    pinMode(pbuttonPin, INPUT_PULLUP); 
+    pinMode(relayPin, OUTPUT);
+    digitalWrite(relayPin, HIGH);
+   
     // initialize digital pin 1 as an output for resistence control.
     pinMode(1, OUTPUT);
 
@@ -156,8 +193,12 @@ void setup()
 
 }
 
-void loop() {
 
+
+void loop() {
+    //call manual push button relay
+    manualactivation();
+    
     // MQTT client:
     mqttClient.loop();
 
