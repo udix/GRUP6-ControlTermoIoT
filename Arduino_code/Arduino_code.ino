@@ -8,6 +8,7 @@
 #include <MQTTClient.h>
 #include "arduino_secrets.h"
 #include <SD.h>
+#include <ArduinoJson.h>
 
 char ssid[] = SECRET_SSID;
 char pass[] = SECRET_PASS;
@@ -19,6 +20,7 @@ char mqttClientId[] = SECRET_MQTT_CLIENT_ID;
 char mqttUser[] = SECRET_MQTT_USER;
 char mqttPass[] = SECRET_MQTT_PASS;
 unsigned long lastMillis = 0;
+unsigned long lastMillisFiles = 0;
 
 // vars for water heater control
 float temp_sp = 0;
@@ -33,6 +35,7 @@ RTCZero rtc; // create an RTC object
 
 const int GMT = 1; //change this to adapt it to your time zone
 const int chipSelect = 4;
+int ledState = LOW;
 
 void initializeSDCard()
 {
@@ -54,10 +57,7 @@ String getFileNameForMinute()
     //Returns the name of the file considering the
     //epoch value
     String fileName = "";
-//    fileName += String(String(rtc.getDay()) + "_" + String(rtc.getMonth()) + "_" + String(rtc.getYear()) + "_");
     fileName += String(String(rtc.getDay()) + "_" + String(rtc.getHours()) + "_" + String(rtc.getMinutes()) + ".txt");
-    Serial.println("Filename has the following value");
-    Serial.println(fileName);
     return (fileName);
 }
 
@@ -80,12 +80,18 @@ void saveMeasureWithTimeStamp(float temperature)
 
 void sendTemperature(String strEpoch, String strTemperature)
 {
-    Serial.println("Sending MQTT message");
+    Serial.println("Sending MQTT message with the following values");
     Serial.println (strEpoch);
     Serial.println (strTemperature);
-    //char json[] = "{\"sensor\":\"gps\",\"time\":1351824120,\"data\":[48.756080,2.302038]}";
-
-    mqttClient.publish("homie/mkr1000/waterHeater/temperature", strTemperature);
+    
+    StaticJsonDocument<200> doc;
+    //doc["measurement"] = "temperature";
+    doc["value"] = strTemperature;
+    //InfluxDB uses nanoseconds epoch
+    doc["time"] = String (strEpoch + "000000000");
+    char JSONmessageBuffer[100];
+    serializeJson (doc,JSONmessageBuffer);
+    mqttClient.publish("homie/mkr1000/waterHeater/temperature", JSONmessageBuffer);
 }
 
 void writeToSDCard(String dataString, String fileName)
@@ -98,13 +104,13 @@ void writeToSDCard(String dataString, String fileName)
     // if the file is available, write to it:
     if (dataFile)
     {
-        Serial.println();
+        //Serial.println();
         Serial.println("Writing data to SD Card");
-        Serial.println();
+        //Serial.println(fileName);
         dataFile.print(dataString);
         dataFile.close();
         // print to the serial port too:
-        Serial.println(dataString);
+        //Serial.println(dataString);
     }
     // if the file isn't open, pop up an error:
     else
@@ -115,6 +121,16 @@ void writeToSDCard(String dataString, String fileName)
 
 void readCacheAndSend()
 {
+    if (!mqttClient.connected())
+    {
+        Serial.println ("Storing information offline, MQTT server not available.");
+        return;
+    }
+    if (ledState == LOW)
+      ledState = HIGH;
+    else
+      ledState = LOW;
+    digitalWrite(LED_BUILTIN,ledState);
     File dir = SD.open("/");
 
     //Read all the files
@@ -124,13 +140,16 @@ void readCacheAndSend()
     //NO : Read the file
     // For every line, send the measure and time saveMeasureWithTimeStamp
     // If the message was sent
-    while (true)
+    int MAX_FILES_TO_READ = 5;
+    int numFilesRead =0;
+    while (numFilesRead < MAX_FILES_TO_READ)
     {
         File entry = dir.openNextFile();
         if (!entry)
         {
             // no more files
             // return to the first file in the directory
+            //Serial.println("No more files available in the SD card");
             dir.rewindDirectory();
             break;
         }
@@ -138,11 +157,13 @@ void readCacheAndSend()
         //        {
         //            Serial.print('\t');
         //        }
-        Serial.println (String ("Reading file " + String(entry.name())));
+        //Serial.println (String ("Reading file " + String(entry.name())));
         if (entry.isDirectory())
         {
-            Serial.println("/");
+        //    Serial.println("Directory found");
+            numFilesRead++;
             //printDirectory(entry, numTabs + 1);
+            //SD.remove(entry.name());
         }
         else
         {
@@ -150,8 +171,8 @@ void readCacheAndSend()
             String buffer = "";
             String epoch = "";
             String temperature = "";
-            Serial.print("\t\t");
-            Serial.println(entry.size(), DEC);
+//            Serial.print("\t\t");
+//            Serial.println(entry.size(), DEC);
             while (entry.available())
             {
                 char c = entry.read();
@@ -178,11 +199,13 @@ void readCacheAndSend()
             }
             // close the file:
             entry.close();         
-//            SD.remove(entry.name());   
+            SD.remove(entry.name());   
             Serial.println (String ("File removed " + String(entry.name())));
+            numFilesRead ++;
+        }
         }
     }
-}
+
 
 //Store one file per getMinutes
 //Send measures if files available
@@ -197,8 +220,8 @@ void setRTCwithNTP()
     do
     {
         Serial.print("getting time...");
- //       epoch = WiFi.getTime();
-        epoch = 1576100985;
+//        epoch = WiFi.getTime();
+        epoch = 1576313080;
         delay(1000);
         Serial.println("done");
         numberOfTries++;
@@ -268,47 +291,9 @@ void printWiFiStatus()
     Serial.println(" dBm");
 }
 
-void printReading(float temperature,
-                  float humidity,
-                  float pressure,
-                  float illuminance,
-                  float uva,
-                  float uvb,
-                  float uvIndex)
-{
-    printTime();
-
-    // print each of the sensor values
-    Serial.print("Temperature = ");
-    Serial.print(temperature);
-    Serial.println(" °C");
-
-    Serial.print("Humidity    = ");
-    Serial.print(humidity);
-    Serial.println(" %");
-
-    Serial.print("Pressure    = ");
-    Serial.print(pressure);
-    Serial.println(" kPa");
-
-    Serial.print("Illuminance = ");
-    Serial.print(illuminance);
-    Serial.println(" lx");
-
-    Serial.print("UVA         = ");
-    Serial.println(uva);
-
-    Serial.print("UVB         = ");
-    Serial.println(uvb);
-
-    Serial.print("UV Index    = ");
-    Serial.println(uvIndex);
-    // print an empty line
-    Serial.println();
-}
-
 void connectMqttServer()
 {
+    int MAX_RETRIES = 3;
     Serial.print("checking wifi...");
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -323,14 +308,21 @@ void connectMqttServer()
     // MQTT client connection request
     mqttClient.begin(mqttHost, net);
     Serial.print("\nconnecting to MQTT server...");
-    while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass))
+    int num_tries = 0;
+    while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass) && num_tries<MAX_RETRIES)
     {
         Serial.print(".");
         delay(1000);
+        num_tries ++;
     }
+    if (mqttClient.connected()){
     Serial.println("\nconnected!");
-
     mqttClient.subscribe("/hello");
+    }
+    else
+    {
+        Serial.println("\nMQTT server not available.");
+    }
 }
 
 void messageReceived(String &topic, String &payload)
@@ -341,6 +333,9 @@ void messageReceived(String &topic, String &payload)
 void setup()
 {
 
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN,LOW);
+    
     int watch_dog = Watchdog.enable(180000);
     Serial.begin(9600);
     while (!Serial)
@@ -391,24 +386,24 @@ void setup()
     initializeSDCard();
 
     // MQTT client connection
-//    mqttClient.begin(mqttHost, net);
-//    mqttClient.onMessage(messageReceived);
-//    connectMqttServer();
+    mqttClient.begin(mqttHost, 1883, net);
+    mqttClient.onMessage(messageReceived);
+    connectMqttServer();
     Watchdog.reset();
 }
 
 void loop()
 {
     // MQTT client:
-    //mqttClient.loop();
+    mqttClient.loop();
 
-    //if (!mqttClient.connected())
-    //{
-    //    connectMqttServer();
-    //}
+    if (!mqttClient.connected())
+    {
+        connectMqttServer();
+    }
 
     // publish a message roughly every second.
-    if (millis() - lastMillis > 10000)
+    if (millis() - lastMillis > 1000)
     {
         // read temperature sensor value
         temperature = ENV.readTemperature();
@@ -428,8 +423,12 @@ void loop()
         saveMeasureWithTimeStamp(temperature);
 
         lastMillis = millis();
-        //        mqttClient.publish("/mkr1000_2/temperature", String(temperature));
+        //mqttClient.publish("/mkr1000_2/temperature", String(temperature));
     }
-    readCacheAndSend();
+    if (millis() - lastMillisFiles > 500)
+    {   
+        readCacheAndSend();
+        lastMillisFiles = millis();
+    }    
     Watchdog.reset();
 }
