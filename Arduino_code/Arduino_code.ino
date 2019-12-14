@@ -3,7 +3,6 @@
 #include <WiFi101.h>
 #include <MQTT.h>
 #include <MQTTClient.h>
-//#include <vector>
 #include "arduino_secrets.h"
 
 char ssid[] = SECRET_SSID;
@@ -22,29 +21,15 @@ bool man_control = false;
 bool man_value = false;
 float temperature = 0;
 
-
 //vars for relay push button
-
 int pbuttonPin = 2;// connect output to push button
 int relayPin = 10;// Connected to relay (LED)
 int val = 0; // push value from pin 2
 int lightON = 0;//light status
 int pushed = 0;//push status
 
-
 WiFiSSLClient net;
 MQTTClient mqttClient;
-
-struct outTopic
-{
-    String topicName;
-    unsigned long lastUpgrade;
-    String oldValue;
-    String newValue;
-};
-
-//Vector to add all output topics, to check life time
-//std::vector<outTopic> arrayOutTopics;
 
 void printWiFiStatus()
 {
@@ -182,17 +167,7 @@ void setup()
     connectMqttServer();
     Watchdog.reset();
 
-    //outTopic tmp = new outTopic();
-
-    //tmp.topicName = "homie/mkrenv1/thermostat/temperature";
-    //arrayOutTopics.push_back(tmp);
-
-    //tmp = new outTopic();
-    //tmp.topicName = "homie/mkr1000/waterHeater/resistance";
-    //arrayOutTopics.push_back(tmp);
-
 }
-
 
 
 void loop() {
