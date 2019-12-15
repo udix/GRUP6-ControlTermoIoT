@@ -29,7 +29,11 @@ int lightON = 0;//light status
 int pushed = 0;//push status
 
 WiFiSSLClient net;
+WiFiServer HTTPserver(80);
 MQTTClient mqttClient;
+
+// Declare reset function
+void(* resetFunc) (void) = 0;
 
 void printWiFiStatus()
 {
@@ -49,40 +53,27 @@ void printWiFiStatus()
     Serial.println(" dBm");
 }
 
-void connectWiFi() {
+void connectMqttServer() {
 
-    while (status != WL_CONNECTED) {
-        Serial.print("Attempting to connect to SSID: ");
-        Serial.println(ssid);
-        // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-        status = WiFi.begin(ssid, pass);
-
-        // wait 10 seconds for connection:
-        delay(10000);
-    }
-
-}
-
-void connectMqttServer()
-{
-    Serial.print("checking wifi...");
-    if (WiFi.status() != WL_CONNECTED) { connectWiFi(); }
-
+    if (WiFi.status() != WL_CONNECTED){ WiFi.begin(); }
+    
     // MQTT client connection request
     mqttClient.begin(mqttHost, 1883, net);
     Serial.print("\nconnecting to MQTT server...");
     while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass))
     {
+        Serial.print(WiFi.status());
         Serial.print(".");
         delay(1000);
     }
     Serial.println("\nconnected!");
 
     mqttClient.subscribe("homie/mkr1000/waterHeater/#");
+    
 }
 
-void messageReceived(String &topic, String &payload)
-{
+void messageReceived(String &topic, String &payload) {
+
     Serial.println("incoming: " + topic + " - " + payload);
 
     // New value for Manual control, read and save it
@@ -106,11 +97,11 @@ void manualactivation(){
 
   lightON = val;
       if(pushed == HIGH){
-        Serial.println("Light ON");
+        //Serial.println("Light ON");
         digitalWrite(relayPin, LOW); 
        
       }else{
-        Serial.println("Light OFF");
+        //Serial.println("Light OFF");
         digitalWrite(relayPin, HIGH);
    
       }     
@@ -128,7 +119,7 @@ void setup()
     // initialize digital pin 1 as an output for resistence control.
     pinMode(1, OUTPUT);
 
-    int watch_dog = Watchdog.enable(180000);
+    int watch_dog = Watchdog.enable(300000);
     Serial.begin(9600);
     while (!Serial)
         ;
@@ -155,9 +146,18 @@ void setup()
     }
     Watchdog.reset();
 
-    // attempt to connect to WiFi network:
-    connectWiFi();
-    Watchdog.reset();
+    // Start Wifi in provisioning mode:
+    //  1) This will try to connect to a previously associated access point.
+    //  2) If this fails, an access point named "wifi101-XXXX" will be created, where XXXX
+    //     is the last 4 digits of the boards MAC address. Once you are connected to the access point,
+    //     you can configure an SSID and password by visiting http://wifi101/
+    WiFi.beginProvision();
+
+    while (WiFi.status() != WL_CONNECTED)
+        Watchdog.reset();
+
+    // Start HTTP server
+    HTTPserver.begin();
 
     printWiFiStatus(); // you're connected now, so print out the status:
 
@@ -188,10 +188,37 @@ void loop() {
     } else {
         digitalWrite(1, man_value);
     }
+
+    WiFiClient HTTPclient = HTTPserver.available();
+
+    if(HTTPclient) {
+        while (HTTPclient.connected()) {
+            
+            if(HTTPclient.available()) {
+                String str = HTTPclient.readString();
+
+                Serial.println(str);
+
+                // Reset device
+                if (str.indexOf("GET /reset")) { resetFunc(); }
+                
+                webConfiguration(HTTPclient, mqttClient);
+
+                break;
+
+            }
+
+        }
+        
+    }
+
+    delay(1);
+
+    HTTPclient.stop();
     
-    // publish a message roughly every second.
-    if (millis() - lastMillis > 10000)
-    {
+    // publish a message roughly every 10 seconds.
+    if (millis() - lastMillis > 10000) {
+
         // read temperature sensor value
         temperature = ENV.readTemperature();
     
