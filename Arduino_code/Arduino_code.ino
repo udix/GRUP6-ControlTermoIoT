@@ -10,13 +10,21 @@
 #include <string.h>
 #include <cstring>
 
+typedef struct {
+    boolean valid;
+    char mqttHost[50];
+    int mqttPort;
+    char mqttUser[50];
+    char mqttPass[50];
+} MQTTSvr_cred;
+
 int status = WL_IDLE_STATUS;
 char mqttClientId[] = SECRET_MQTT_CLIENT_ID;
 unsigned long lastMillis = 0;
 
-FlashStorage(FS_mqttHost, const char*);
-FlashStorage(FS_mqttUser, const char*);
-FlashStorage(FS_mqttPass, const char*);
+FlashStorage(myFS, MQTTSvr_cred);
+
+MQTTSvr_cred myMQTTSvr;
 
 // vars for water heater control
 float temp_sp = 0;
@@ -60,19 +68,26 @@ void printWiFiStatus()
 void connectMqttServer() {
 
     if (WiFi.status() != WL_CONNECTED){ WiFi.begin(); }
+
+    if (mqttClient.connected()) { return; }
+    if (!myMQTTSvr.valid) { return; }
     
     // MQTT client connection request
-    mqttClient.begin(FS_mqttHost.read(), 1883, net);
-    Serial.print("\nconnecting to MQTT server...");
-    while (!mqttClient.connect(mqttClientId, FS_mqttUser.read(), FS_mqttPass.read()))
-    {
-        Serial.print(WiFi.status());
-        Serial.print(".");
-        delay(1000);
-    }
-    Serial.println("\nconnected!");
+    mqttClient.begin(myMQTTSvr.mqttHost, myMQTTSvr.mqttPort, net);
+    Serial.println("\nconnecting to MQTT server...");
+    Serial.println(myMQTTSvr.mqttHost);
+    
+    // Try to connect
+    mqttClient.connect(mqttClientId, myMQTTSvr.mqttUser, myMQTTSvr.mqttPass);
+    delay(1000);
 
-    mqttClient.subscribe("homie/mkr1000/waterHeater/#");
+    if(mqttClient.connected()) {
+        Serial.println("\nconnected!");
+        mqttClient.subscribe("homie/mkr1000/waterHeater/#");
+        mqttClient.onMessage(messageReceived);
+    } else {
+        Serial.println("MQTT Host not reacheable!");
+    }
     
 }
 
@@ -115,23 +130,22 @@ void manualactivation(){
 
 void setup()
 {
+    //read mqtt configuration
+    myMQTTSvr = myFS.read();
+
     //init push button ON,OFF
     pinMode(pbuttonPin, INPUT_PULLUP); 
     pinMode(relayPin, OUTPUT);
     digitalWrite(relayPin, HIGH);
-
-    FS_mqttHost.write(SECRET_MQTT_HOST);
-    FS_mqttPass.write(SECRET_MQTT_PASS);
-    FS_mqttUser.write(SECRET_MQTT_USER);
    
     // initialize digital pin 1 as an output for resistence control.
     pinMode(1, OUTPUT);
 
-    int watch_dog = Watchdog.enable(300000);
+    //int watch_dog = Watchdog.enable(300000);
     Serial.begin(9600);
     
     Serial.print("Enabled the watchdog with max countdown of ");
-    Serial.print(watch_dog, DEC);
+    //Serial.print(watch_dog, DEC);
     Serial.println(" milliseconds!");
 
     if (!ENV.begin())
@@ -168,8 +182,6 @@ void setup()
     printWiFiStatus(); // you're connected now, so print out the status:
 
     // MQTT client connection
-    mqttClient.begin(FS_mqttHost.read(), net);
-    mqttClient.onMessage(messageReceived);
     connectMqttServer();
     Watchdog.reset();
 
@@ -179,11 +191,12 @@ void setup()
 void loop() {
     //call manual push button relay
     manualactivation();
+
+    //connect to MQTT server if it is disconnected
+    connectMqttServer();
     
     // MQTT client:
     mqttClient.loop();
-
-    if (!mqttClient.connected()) { connectMqttServer(); }
 
     if (!man_control) {
         if (temperature > temp_sp + temp_hyst) {

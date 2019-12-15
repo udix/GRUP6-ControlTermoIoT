@@ -67,7 +67,7 @@ void webConfiguration(WiFiClient &client, MQTTClient &mqttClient) {
     client.println("<tr>");
     client.println("<td>Host:</td>");
     client.print("<td>");
-    client.print(String(FS_mqttHost.read()));
+    client.print(String(myMQTTSvr.mqttHost));
     client.print(":1883");
     client.print("</td>");
     client.println("</tr>");
@@ -86,16 +86,37 @@ void webConfiguration(WiFiClient &client, MQTTClient &mqttClient) {
 
     client.println("<h3>CONFIGURATION</h3>");
 
+    //------CONFIGURATION
     client.println("<form method='get' action='saveConfig'>");
-    client.println("MQTT Host: <input type='text' name='mqttHost'><br>");
-    client.println("<p>&nbsp;</p>");
-    client.println("MQTT Port: <input type='number' name='mqttPort'><br>");
-    client.println("<p>&nbsp;</p>");
-    client.println("MQTT User: <input type='text' name='mqttUser'><br>");
-    client.println("<p>&nbsp;</p>");
-    client.println("MQTT Password: <input type='password' name='mqttPass'><br>");
-    client.println("<p>&nbsp;</p>");
-    client.println("<input type='submit' value='Submit'>");
+
+    client.println("<table>");
+    client.println("<tbody>");
+
+    client.println("<tr>");
+    client.println("<td>MQTT Host:</td>");
+    client.println("<td><input type='text' name='mqttHost'><br></td>");
+    client.println("</tr>");
+
+    client.println("<tr>");
+    client.println("<td>MQTT Port:</td>");
+    client.println("<td><input type='number' name='mqttPort'><br></td>");
+    client.println("</tr>");
+
+    client.println("<tr>");
+    client.println("<td>MQTT User:</td>");
+    client.println("<td><input type='text' name='mqttUser'><br></td>");
+    client.println("</tr>");
+
+    client.println("<tr>");
+    client.println("<td>MQTT Password:</td>");
+    client.println("<td><input type='password' name='mqttPass'><br></td>");
+    client.println("</tr>");
+
+    client.println("</tbody>");
+    client.println("</table>");
+
+    client.println("<input type='submit' value='Save Configuration'>");
+
     client.println("</form>");
 
     // Reset button
@@ -124,36 +145,27 @@ void webSaveConfig(String data) {
         if (parameters.substring(pStartIdx, idx) == "mqttHost") {
             // remove parameter name
             parameters.remove(0, idx + 1);
-            // copy parameter value in an array of chars
-            char buf[parameters.indexOf('&') + 1];
-            parameters.toCharArray(buf, parameters.indexOf('&') + 1);
-            // save parameter value in flash memory
-            FS_mqttHost.write(buf);
-            Serial.println(String(buf));
+            // save parameter into myServerCredentials struct
+            String host = parameters.substring(0, parameters.indexOf('&'));
+            host.toCharArray(myMQTTSvr.mqttHost, 50);
         } else if (parameters.substring(pStartIdx, idx) == "mqttPort") {
             // remove parameter name
             parameters.remove(0, idx + 1);
-            // copy parameter value in an array of chars
-            char buf[parameters.indexOf('&')];
-            parameters.toCharArray(buf, parameters.indexOf('&'));
-            // save parameter value in flash memory
-            //FS_mqttHost.write(buf);
+            // save parameter into myServerCredentials struct
+            int port = parameters.substring(0, parameters.indexOf('&')).toInt();
+            myMQTTSvr.mqttPort = port;
         } else if (parameters.substring(pStartIdx, idx) == "mqttUser") {
             // remove parameter name
             parameters.remove(0, idx + 1);
-            // copy parameter value in an array of chars
-            char buf[parameters.indexOf('&')];
-            parameters.toCharArray(buf, parameters.indexOf('&'));
-            // save parameter value in flash memory
-            FS_mqttUser.write(buf);
+            // save parameter into myServerCredentials struct
+            String user = parameters.substring(0, parameters.indexOf('&'));
+            user.toCharArray(myMQTTSvr.mqttUser, 50);
         } else if (parameters.substring(pStartIdx, idx) == "mqttPass") {
             // remove parameter name
             parameters.remove(0, idx + 1);
-            // copy parameter value in an array of chars
-            char buf[parameters.indexOf('&')];
-            parameters.toCharArray(buf, parameters.indexOf('&'));
-            // save parameter value in flash memory
-            FS_mqttPass.write(buf);
+            // save parameter into myServerCredentials struct
+            String pass = parameters.substring(0, parameters.length());
+            pass.toCharArray(myMQTTSvr.mqttPass, 50);
         }
 
         // remove value from parameters string
@@ -162,36 +174,11 @@ void webSaveConfig(String data) {
         } else {
             parameters.remove(0, parameters.length());
         }
-        
-        Serial.println(String(FS_mqttHost.read()));
-        
+
     }
+    // set valid to true, because we have been saved values
+    myMQTTSvr.valid = true;
+    // Save in flash memory
+    myFS.write(myMQTTSvr);
 
-/*
-  //Reads parameters introduced by user
-  String qsid;
-  qsid = server.arg("ssid");
-  qsid.replace("%2F", "/");
-  Serial.println("Got SSID: " + qsid);
-  esid = (char*) qsid.c_str();
-
-  String qpass;
-  qpass = server.arg("pass");
-  qpass.replace("%2F", "/");
-  Serial.println("Got pass: " + qpass);
-  epass = (char*) qpass.c_str();
-
-  String qalert;
-  qalert = server.arg("alert");
-  qalert.replace("%2F", "/");
-  Serial.println("Got type of alert: " + qalert);
-  alert = (char*) qalert.c_str();
-
-  Serial.print("Settings written ");
-  //Save configuration to flash memory
-  saveConfig() ? Serial.println("sucessfully.") : Serial.println("not succesfully!");
-  Serial.println("Restarting!");
-  delay(1000);
-  ESP.reset();
-*/
 }
