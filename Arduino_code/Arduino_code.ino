@@ -184,7 +184,7 @@ void readCacheAndSend()
             numFilesRead++;
         }
     }
-    mqttClient.disconnect();
+    //mqttClient.disconnect();
 }
 
 void setRTCwithNTP()
@@ -422,6 +422,16 @@ void setup()
 void loop() {
     //call manual push button relay
     manualactivation();
+
+    if (!man_control) {
+        if (temperature > temp_sp + temp_hyst) {
+            digitalWrite(1, false);
+        } else if (temperature < temp_sp - temp_hyst) {
+            digitalWrite(1, true);
+        }       
+    } else {
+        digitalWrite(1, man_value);
+    }
     
     // MQTT client:
     mqttClient.loop();
