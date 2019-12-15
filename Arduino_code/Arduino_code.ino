@@ -195,17 +195,20 @@ void setRTCwithNTP()
     {
         Serial.print("getting time...");
         epoch = WiFi.getTime();
-        //Workaround for issue with getTime returning 0
-        //epoch = 1576361581;
         delay(1000);
         Serial.println("done");
         numberOfTries++;
-    } while ((epoch == 0) || (numberOfTries < maxTries));
-
+    } while ((epoch == 0) && (numberOfTries < maxTries));
+    //Fix for the issue with getTime
+    if (epoch == 0)
+    {
+                epoch = 1576425269;
+    }
     if (numberOfTries > maxTries)
     {
         Serial.print("NTP unreachable!!");
         WiFi.disconnect();
+
     }
     else
     {
@@ -312,6 +315,7 @@ void connectMqttServer()
     {
         Serial.println("\nMQTT server not available.");
     }
+    mqttClient.subscribe("homie/mkr1000/waterHeater/#");
 }
 
 void messageReceived(String &topic, String &payload)
@@ -339,11 +343,11 @@ void manualactivation(){
 
   lightON = val;
       if(pushed == HIGH){
-        Serial.println("Light ON");
+        //Serial.println("Light ON");
         digitalWrite(relayPin, LOW); 
        
       }else{
-        Serial.println("Light OFF");
+        //Serial.println("Light OFF");
         digitalWrite(relayPin, HIGH);
    
       }     
