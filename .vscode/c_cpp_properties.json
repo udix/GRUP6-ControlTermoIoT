@@ -3,6 +3,7 @@
         {
             "name": "Win32",
             "includePath": [
+                "C:\\Users\\efb\\Documents\\Arduino\\libraries\\ArduinoJson\\src",
                 "C:\\Users\\efb\\Documents\\Arduino\\libraries\\MQTT\\src",
                 "C:\\Users\\efb\\Documents\\Arduino\\libraries\\RTCZero\\src",
                 "C:\\Users\\efb\\Documents\\Arduino\\libraries\\FlashStorage\\src",

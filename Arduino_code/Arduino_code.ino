@@ -1,27 +1,33 @@
-//#include <FlashAsEEPROM.h>
-//#include <FlashStorage.h>
 #include <Adafruit_SleepyDog.h>
 #include <Arduino_MKRENV.h>
 #include <WiFi101.h>
 #include <RTCZero.h>
 #include <MQTT.h>
 #include <MQTTClient.h>
-#include "arduino_secrets.h"
 #include <SD.h>
 #include <ArduinoJson.h>
 
-char ssid[] = SECRET_SSID;
-char pass[] = SECRET_PASS;
+#include <FlashAsEEPROM.h>
+#include <FlashStorage.h>
+
+typedef struct {
+    boolean valid;
+    char mqttHost[50];
+    int mqttPort;
+    char mqttUser[50];
+    char mqttPass[50];
+} MQTTSvr_cred;
+
 int keyIndex = 0;
 int status = WL_IDLE_STATUS;
-char mqttHost[] = SECRET_MQTT_HOST;
-char mqttClientId[] = SECRET_MQTT_CLIENT_ID;
-//long randNumber;
-char mqttUser[] = SECRET_MQTT_USER;
-char mqttPass[] = SECRET_MQTT_PASS;
+char mqttClientId[] = "MKR1000";
 unsigned long lastMillis = 0;
 unsigned long lastMillisFiles = 0;
 int MAX_FILES_TO_READ = 5;
+
+FlashStorage(myFS, MQTTSvr_cred);
+
+MQTTSvr_cred myMQTTSvr;
 
 // vars for water heater control
 float temp_sp = 0;
@@ -38,6 +44,7 @@ int lightON = 0;//light status
 int pushed = 0;//push status
 
 WiFiSSLClient net;
+WiFiServer HTTPserver(80);
 MQTTClient mqttClient;
 RTCZero rtc; // create an RTC object
 
@@ -251,6 +258,9 @@ void print2digits(int number)
     Serial.print(number);
 }
 
+// Declare reset function
+void(* resetFunc) (void) = 0;
+
 void printWiFiStatus()
 {
     // print the SSID of the network you're attached to:
@@ -269,57 +279,36 @@ void printWiFiStatus()
     Serial.println(" dBm");
 }
 
-void connectMqttServer()
-{
-    int MAX_RETRIES = 3;
-    Serial.print("checking wifi...");
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        Serial.print(".");
-        delay(1000);
-    }
 
-    //randomSeed(analogRead(0));
-    //randNumber = random(300);
-    //char mqttClientId[] = String(randNumber);
+void connectMqttServer() {
 
+    if (WiFi.status() != WL_CONNECTED){ WiFi.begin(); }
+
+    if (mqttClient.connected()) { return; }
+    if (!myMQTTSvr.valid) { return; }
+    
     // MQTT client connection request
-    mqttClient.begin(mqttHost, net);
-    Serial.print("\nconnecting to MQTT server...");
-    int num_tries = 0;
-    unsigned int successful_connection = 0;
-    while (num_tries < MAX_RETRIES && successful_connection == 0)
-    {
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            successful_connection = mqttClient.connect(mqttClientId, mqttUser, mqttPass);
-        }
-        //Serial.print(".");
-        //Serial.print(num_tries);
-        num_tries++;
-    }
-    /*    while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass) && num_tries < MAX_RETRIES)
-    {
-        Serial.print(".");
-        Serial.print(num_tries);
-        delay(1000);
-        num_tries++;
-    }
-  */
-    if (mqttClient.connected())
-    {
+    mqttClient.begin(myMQTTSvr.mqttHost, myMQTTSvr.mqttPort, net);
+    Serial.println("\nconnecting to MQTT server...");
+    Serial.println(myMQTTSvr.mqttHost);
+    
+    // Try to connect
+    mqttClient.connect(mqttClientId, myMQTTSvr.mqttUser, myMQTTSvr.mqttPass);
+    delay(1000);
+
+    if(mqttClient.connected()) {
         Serial.println("\nconnected!");
-        mqttClient.subscribe("/hello");
+        mqttClient.subscribe("homie/mkr1000/waterHeater/#");
+        mqttClient.onMessage(messageReceived);
+    } else {
+        Serial.println("MQTT Host not reacheable!");
     }
-    else
-    {
-        Serial.println("\nMQTT server not available.");
-    }
+   
     mqttClient.subscribe("homie/mkr1000/waterHeater/#");
 }
 
-void messageReceived(String &topic, String &payload)
-{
+void messageReceived(String &topic, String &payload) {
+
     Serial.println("incoming: " + topic + " - " + payload);
 
     // New value for Manual control, read and save it
@@ -358,16 +347,22 @@ void manualactivation(){
 void setup()
 {
 
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
+    //read mqtt configuration
+    myMQTTSvr = myFS.read();
 
-    int watch_dog = Watchdog.enable(180000);
+    //init push button ON,OFF
+    pinMode(pbuttonPin, INPUT_PULLUP); 
+    pinMode(relayPin, OUTPUT);
+    digitalWrite(relayPin, HIGH);
+   
+    // initialize digital pin 1 as an output for resistence control.
+    pinMode(1, OUTPUT);
+
+    //int watch_dog = Watchdog.enable(300000);
     Serial.begin(9600);
-    while (!Serial)
-        ;
-
+    
     Serial.print("Enabled the watchdog with max countdown of ");
-    Serial.print(watch_dog, DEC);
+    //Serial.print(watch_dog, DEC);
     Serial.println(" milliseconds!");
 
     if (!ENV.begin())
@@ -388,18 +383,19 @@ void setup()
     }
     Watchdog.reset();
 
-    // attempt to connect to WiFi network:
-    while (status != WL_CONNECTED)
-    {
-        Serial.print("Attempting to connect to SSID: ");
-        Serial.println(ssid);
-        // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-        status = WiFi.begin(ssid, pass);
+    // Start Wifi in provisioning mode:
+    //  1) This will try to connect to a previously associated access point.
+    //  2) If this fails, an access point named "wifi101-XXXX" will be created, where XXXX
+    //     is the last 4 digits of the boards MAC address. Once you are connected to the access point,
+    //     you can configure an SSID and password by visiting http://wifi101/
+    WiFi.beginProvision();
 
-        // wait 10 seconds for connection:
-        delay(10000);
+    while (WiFi.status() != WL_CONNECTED)
         Watchdog.reset();
-    }
+
+    // Start HTTP server
+    HTTPserver.begin();
+
     printWiFiStatus(); // you're connected now, so print out the status:
 
     rtc.begin(); // initialize the RTC library
@@ -411,8 +407,6 @@ void setup()
     initializeSDCard();
 
     // MQTT client connection
-    mqttClient.begin(mqttHost, 1883, net);
-    mqttClient.onMessage(messageReceived);
     connectMqttServer();
     Watchdog.reset();
 
@@ -423,6 +417,12 @@ void loop() {
     //call manual push button relay
     manualactivation();
 
+    //connect to MQTT server if it is disconnected
+    connectMqttServer();
+    
+    // MQTT client:
+    mqttClient.loop();
+
     if (!man_control) {
         if (temperature > temp_sp + temp_hyst) {
             digitalWrite(1, false);
@@ -432,18 +432,39 @@ void loop() {
     } else {
         digitalWrite(1, man_value);
     }
-    
-    // MQTT client:
-    mqttClient.loop();
 
-    if (!mqttClient.connected())
-    {
-        connectMqttServer();
+    WiFiClient HTTPclient = HTTPserver.available();
+
+    if(HTTPclient) {
+        while (HTTPclient.connected()) {
+            
+            if(HTTPclient.available()) {
+                String str = HTTPclient.readString();
+
+                Serial.println(str);
+
+                // Reset device
+                //if (str.indexOf("GET /reset")) { resetFunc(); }
+
+                if (str.indexOf("/saveConfig")) { webSaveConfig(str); }
+                
+                webConfiguration(HTTPclient, mqttClient);
+
+                break;
+
+            }
+
+        }
+        
     }
+
+    delay(1);
+
+    HTTPclient.stop();
     
-    // publish a message roughly every second.
-    if (millis() - lastMillis > 1000)
-    {
+    // publish a message roughly every 10 seconds.
+    if (millis() - lastMillis > 10000) {
+      
         // read temperature sensor value
         temperature = ENV.readTemperature();
 
