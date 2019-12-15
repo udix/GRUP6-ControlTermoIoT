@@ -1,18 +1,27 @@
+//#include <FlashAsEEPROM.h>
+//#include <FlashStorage.h>
 #include <Adafruit_SleepyDog.h>
 #include <Arduino_MKRENV.h>
 #include <WiFi101.h>
+#include <RTCZero.h>
 #include <MQTT.h>
 #include <MQTTClient.h>
 #include "arduino_secrets.h"
+#include <SD.h>
+#include <ArduinoJson.h>
 
 char ssid[] = SECRET_SSID;
 char pass[] = SECRET_PASS;
+int keyIndex = 0;
 int status = WL_IDLE_STATUS;
 char mqttHost[] = SECRET_MQTT_HOST;
 char mqttClientId[] = SECRET_MQTT_CLIENT_ID;
+//long randNumber;
 char mqttUser[] = SECRET_MQTT_USER;
 char mqttPass[] = SECRET_MQTT_PASS;
 unsigned long lastMillis = 0;
+unsigned long lastMillisFiles = 0;
+int MAX_FILES_TO_READ = 5;
 
 // vars for water heater control
 float temp_sp = 0;
@@ -30,6 +39,214 @@ int pushed = 0;//push status
 
 WiFiSSLClient net;
 MQTTClient mqttClient;
+RTCZero rtc; // create an RTC object
+
+const int GMT = 1; //change this to adapt it to your time zone
+const int chipSelect = 4;
+int ledState = LOW;
+
+void initializeSDCard()
+{
+    Serial.print("Initializing SD card...");
+
+    // see if the card is present and can be initialized:
+    if (!SD.begin(chipSelect))
+    {
+        Serial.println("Card failed, or not present");
+        // don't do anything more:
+        while (1)
+            ;
+    }
+    Serial.println("card initialized.");
+}
+
+String getFileNameForMinute()
+{
+    //Returns the name of the file considering the
+    //epoch value
+    String fileName = "";
+    fileName += String(String(rtc.getDay()) + "_" + String(rtc.getHours()) + "_" + String(rtc.getMinutes()) + ".txt");
+    return (fileName);
+}
+
+//The name of the file where we store the measures will change every minute
+void saveMeasureWithTimeStamp(float temperature)
+{
+    String fileName = getFileNameForMinute();
+    String dataString = "";
+    dataString += String(String(rtc.getEpoch()) + "-" + String(temperature) + "\n");
+    writeToSDCard(dataString, fileName);
+}
+
+void sendTemperature(String strEpoch, String strTemperature)
+{
+    Serial.println();
+    Serial.println("Sending MQTT message with the following values");
+    Serial.println(strEpoch);
+    Serial.println(strTemperature);
+
+    StaticJsonDocument<200> doc;
+    doc["value"] = strTemperature;
+    //InfluxDB uses nanoseconds epoch and epoch comes in seconds
+    doc["time"] = String(strEpoch + "000000000");
+    char JSONmessageBuffer[100];
+    serializeJson(doc, JSONmessageBuffer);
+    mqttClient.publish("homie/mkr1000/waterHeater/temperature", JSONmessageBuffer);
+
+}
+
+void writeToSDCard(String dataString, String fileName)
+{
+    File dataFile = SD.open(fileName.c_str(), FILE_WRITE);
+
+    // if the file is available, write to it:
+    if (dataFile)
+    {
+        Serial.println("Writing data to SD Card");
+        dataFile.print(dataString);
+        dataFile.close();
+    }
+    // if the file isn't open, pop up an error:
+    else
+    {
+        Serial.println("ERROR opening file");
+    }
+}
+
+// Reads the files and sends the measures contained in it
+// Read a maximum of MAX_FILES_TO_READ on every loop iteration to avoid blocking the execution flow
+void readCacheAndSend()
+{
+    if (!mqttClient.connected())
+    {
+        Serial.println("Storing information offline, MQTT server not available.");
+        return;
+    }
+    if (ledState == LOW)
+        ledState = HIGH;
+    else
+        ledState = LOW;
+    digitalWrite(LED_BUILTIN, ledState);
+    File dir = SD.open("/");
+
+    int numFilesRead = 0;
+    while (numFilesRead < MAX_FILES_TO_READ)
+    {
+        File entry = dir.openNextFile();
+        if (!entry)
+        {
+            // no more files
+            // return to the first file in the directory
+            //Serial.println("No more files available in the SD card");
+            dir.rewindDirectory();
+            break;
+        }
+        //Serial.println (String ("Reading file " + String(entry.name())));
+        if (entry.isDirectory())
+        {
+            //    Serial.println("Directory found");
+            numFilesRead++;
+        }
+        else
+        {
+            // files have sizes, directories do not
+            String buffer = "";
+            String epoch = "";
+            String temperature = "";
+            while (entry.available())
+            {
+                char c = entry.read();
+                if (c == '-')
+                {
+                    epoch = String(buffer);
+                    buffer = "";
+                }
+                else
+                {
+                    if (c == '\n')
+                    {
+                        temperature = String(buffer);
+                        buffer = "";
+                        sendTemperature(epoch, temperature);
+                    }
+                    else
+                    {
+                        buffer += c;
+                    }
+                }
+
+                Serial.write(c);
+            }
+            // close the file:
+            entry.close();
+            SD.remove(entry.name());
+            Serial.println(String("File removed " + String(entry.name())));
+            numFilesRead++;
+        }
+    }
+    mqttClient.disconnect();
+}
+
+void setRTCwithNTP()
+{
+    unsigned long epoch;
+    int numberOfTries = 0, maxTries = 6;
+    do
+    {
+        Serial.print("getting time...");
+        //        epoch = WiFi.getTime();
+        //Workaround for issue with getTime returning 0
+        epoch = 1576361581;
+        delay(1000);
+        Serial.println("done");
+        numberOfTries++;
+    } while ((epoch == 0) || (numberOfTries < maxTries));
+
+    if (numberOfTries > maxTries)
+    {
+        Serial.print("NTP unreachable!!");
+        WiFi.disconnect();
+    }
+    else
+    {
+        Serial.print("Epoch received: ");
+        Serial.println(epoch);
+        rtc.setEpoch(epoch);
+
+        Serial.println();
+    }
+    rtc.setHours(rtc.getHours() + GMT);
+}
+
+void printTime()
+{
+    print2digits(rtc.getHours());
+    Serial.print(":");
+    print2digits(rtc.getMinutes());
+    Serial.print(":");
+    print2digits(rtc.getSeconds());
+    Serial.println();
+}
+
+void printDate()
+{
+    print2digits(rtc.getDay());
+    Serial.print("/");
+    print2digits(rtc.getMonth());
+    Serial.print("/");
+    print2digits(rtc.getYear());
+
+    Serial.println("");
+}
+
+void print2digits(int number)
+{
+    if (number < 10)
+    {
+        Serial.print("0");
+    }
+    Serial.print(number);
+}
 
 void printWiFiStatus()
 {
@@ -49,84 +266,64 @@ void printWiFiStatus()
     Serial.println(" dBm");
 }
 
-void connectWiFi() {
-
-    while (status != WL_CONNECTED) {
-        Serial.print("Attempting to connect to SSID: ");
-        Serial.println(ssid);
-        // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-        status = WiFi.begin(ssid, pass);
-
-        // wait 10 seconds for connection:
-        delay(10000);
-    }
-
-}
-
 void connectMqttServer()
 {
+    int MAX_RETRIES = 3;
     Serial.print("checking wifi...");
-    if (WiFi.status() != WL_CONNECTED) { connectWiFi(); }
-
-    // MQTT client connection request
-    mqttClient.begin(mqttHost, 1883, net);
-    Serial.print("\nconnecting to MQTT server...");
-    while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass))
+    while (WiFi.status() != WL_CONNECTED)
     {
         Serial.print(".");
         delay(1000);
     }
-    Serial.println("\nconnected!");
 
-    mqttClient.subscribe("homie/mkr1000/waterHeater/#");
+    //randomSeed(analogRead(0));
+    //randNumber = random(300);
+    //char mqttClientId[] = String(randNumber);
+
+    // MQTT client connection request
+    mqttClient.begin(mqttHost, net);
+    Serial.print("\nconnecting to MQTT server...");
+    int num_tries = 0;
+    unsigned int successful_connection = 0;
+    while (num_tries < MAX_RETRIES && successful_connection == 0)
+    {
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            successful_connection = mqttClient.connect(mqttClientId, mqttUser, mqttPass);
+        }
+        //Serial.print(".");
+        //Serial.print(num_tries);
+        num_tries++;
+    }
+    /*    while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass) && num_tries < MAX_RETRIES)
+    {
+        Serial.print(".");
+        Serial.print(num_tries);
+        delay(1000);
+        num_tries++;
+    }
+  */
+    if (mqttClient.connected())
+    {
+        Serial.println("\nconnected!");
+        mqttClient.subscribe("/hello");
+    }
+    else
+    {
+        Serial.println("\nMQTT server not available.");
+    }
 }
 
 void messageReceived(String &topic, String &payload)
 {
     Serial.println("incoming: " + topic + " - " + payload);
-
-    // New value for Manual control, read and save it
-    if (topic.indexOf("manCntrl/set") > 0) { man_control = (payload == "true") ? true : false; }
-    // New value for hysteresys temperature, read and save it
-    if (topic.indexOf("hysteresis/set") > 0) { temp_hyst = payload.toFloat(); }
-    // New value for temperature setpoint
-    if (topic.indexOf("setpoint/set") > 0) { temp_sp = payload.toFloat(); }
-    // New value for manual value
-    if (topic.indexOf("/resistence/set") > 0) { man_value = (payload == "true") ? true : false; }
-
 }
-
-
-void manualactivation(){
-  val = digitalRead(pbuttonPin);
-  if(val == HIGH && lightON == LOW){
-    pushed = 1-pushed;
-    delay(100);
-  }    
-
-  lightON = val;
-      if(pushed == HIGH){
-        Serial.println("Light ON");
-        digitalWrite(relayPin, LOW); 
-       
-      }else{
-        Serial.println("Light OFF");
-        digitalWrite(relayPin, HIGH);
-   
-      }     
-
-  delay(100);
-  }
 
 void setup()
 {
-    //init push button ON,OFF
-    pinMode(pbuttonPin, INPUT_PULLUP); 
-    pinMode(relayPin, OUTPUT);
-    digitalWrite(relayPin, HIGH);
-   
-    // initialize digital pin 1 as an output for resistence control.
-    pinMode(1, OUTPUT);
+
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
 
     int watch_dog = Watchdog.enable(180000);
     Serial.begin(9600);
@@ -156,13 +353,29 @@ void setup()
     Watchdog.reset();
 
     // attempt to connect to WiFi network:
-    connectWiFi();
-    Watchdog.reset();
+    while (status != WL_CONNECTED)
+    {
+        Serial.print("Attempting to connect to SSID: ");
+        Serial.println(ssid);
+        // Connect to WPA/WPA2 network. Change this line if using open or WEP network:
+        status = WiFi.begin(ssid, pass);
 
+        // wait 10 seconds for connection:
+        delay(10000);
+        Watchdog.reset();
+    }
     printWiFiStatus(); // you're connected now, so print out the status:
 
+    rtc.begin(); // initialize the RTC library
+    Watchdog.reset();
+    setRTCwithNTP(); // set the RTC time/date using epoch from NTP
+    printTime();     // print the current time
+    printDate();     // print the current date
+    Watchdog.reset();
+    initializeSDCard();
+
     // MQTT client connection
-    mqttClient.begin(mqttHost, net);
+    mqttClient.begin(mqttHost, 1883, net);
     mqttClient.onMessage(messageReceived);
     connectMqttServer();
     Watchdog.reset();
@@ -177,39 +390,45 @@ void loop() {
     // MQTT client:
     mqttClient.loop();
 
-    if (!mqttClient.connected()) { connectMqttServer(); }
-
-    if (!man_control) {
-        if (temperature > temp_sp + temp_hyst) {
-            digitalWrite(1, false);
-        } else if (temperature < temp_sp - temp_hyst) {
-            digitalWrite(1, true);
-        }       
-    } else {
-        digitalWrite(1, man_value);
+    if (!mqttClient.connected())
+    {
+        connectMqttServer();
     }
     
     // publish a message roughly every second.
-    if (millis() - lastMillis > 10000)
+    if (millis() - lastMillis > 1000)
     {
         // read temperature sensor value
         temperature = ENV.readTemperature();
-    
+
         String resistence_st = "false";
         String man_control_str = "false";
 
-        if (digitalRead(1) == HIGH) { resistence_st = "true"; }
-        if (man_control) { man_control_str = "true"; }
-        
-        mqttClient.publish("homie/mkr1000/waterHeater/temperature", String(temperature));
-        mqttClient.publish("homie/mkr1000/waterHeater/resistence", resistence_st);
-        mqttClient.publish("homie/mkr1000/waterHeater/setpoint", String(temp_sp));
-        mqttClient.publish("homie/mkr1000/waterHeater/hysteresis", String(temp_hyst));
-        mqttClient.publish("homie/mkr1000/waterHeater/manCntrl", man_control_str);
+        if (digitalRead(1) == HIGH)
+        {
+            resistence_st = "true";
+        }
+        if (man_control)
+        {
+            man_control_str = "true";
+        }
+        if (mqttClient.connected())
+        {
+            //mqttClient.publish("homie/mkr1000/waterHeater/temperature", String(temperature));
+            mqttClient.publish("homie/mkr1000/waterHeater/resistence", resistence_st);
+            mqttClient.publish("homie/mkr1000/waterHeater/setpoint", String(temp_sp));
+            mqttClient.publish("homie/mkr1000/waterHeater/hysteresis", String(temp_hyst));
+            mqttClient.publish("homie/mkr1000/waterHeater/manCntrl", man_control_str);
+        }
+        saveMeasureWithTimeStamp(temperature);
 
         lastMillis = millis();
-
     }
-
+    // Check if there are new measures to send every 0.5 ms
+    if (millis() - lastMillisFiles > 2000)
+    {
+        readCacheAndSend();
+        lastMillisFiles = millis();
+    }
     Watchdog.reset();
 }
