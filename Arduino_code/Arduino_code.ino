@@ -4,15 +4,19 @@
 #include <MQTT.h>
 #include <MQTTClient.h>
 #include "arduino_secrets.h"
+#include <ArduinoJson.h>
+#include <FlashAsEEPROM.h>
+#include <FlashStorage.h>
+#include <string.h>
+#include <cstring>
 
-char ssid[] = SECRET_SSID;
-char pass[] = SECRET_PASS;
 int status = WL_IDLE_STATUS;
-char mqttHost[] = SECRET_MQTT_HOST;
 char mqttClientId[] = SECRET_MQTT_CLIENT_ID;
-char mqttUser[] = SECRET_MQTT_USER;
-char mqttPass[] = SECRET_MQTT_PASS;
 unsigned long lastMillis = 0;
+
+FlashStorage(FS_mqttHost, const char*);
+FlashStorage(FS_mqttUser, const char*);
+FlashStorage(FS_mqttPass, const char*);
 
 // vars for water heater control
 float temp_sp = 0;
@@ -58,9 +62,9 @@ void connectMqttServer() {
     if (WiFi.status() != WL_CONNECTED){ WiFi.begin(); }
     
     // MQTT client connection request
-    mqttClient.begin(mqttHost, 1883, net);
+    mqttClient.begin(FS_mqttHost.read(), 1883, net);
     Serial.print("\nconnecting to MQTT server...");
-    while (!mqttClient.connect(mqttClientId, mqttUser, mqttPass))
+    while (!mqttClient.connect(mqttClientId, FS_mqttUser.read(), FS_mqttPass.read()))
     {
         Serial.print(WiFi.status());
         Serial.print(".");
@@ -115,15 +119,17 @@ void setup()
     pinMode(pbuttonPin, INPUT_PULLUP); 
     pinMode(relayPin, OUTPUT);
     digitalWrite(relayPin, HIGH);
+
+    FS_mqttHost.write(SECRET_MQTT_HOST);
+    FS_mqttPass.write(SECRET_MQTT_PASS);
+    FS_mqttUser.write(SECRET_MQTT_USER);
    
     // initialize digital pin 1 as an output for resistence control.
     pinMode(1, OUTPUT);
 
     int watch_dog = Watchdog.enable(300000);
     Serial.begin(9600);
-    while (!Serial)
-        ;
-
+    
     Serial.print("Enabled the watchdog with max countdown of ");
     Serial.print(watch_dog, DEC);
     Serial.println(" milliseconds!");
@@ -162,7 +168,7 @@ void setup()
     printWiFiStatus(); // you're connected now, so print out the status:
 
     // MQTT client connection
-    mqttClient.begin(mqttHost, net);
+    mqttClient.begin(FS_mqttHost.read(), net);
     mqttClient.onMessage(messageReceived);
     connectMqttServer();
     Watchdog.reset();
@@ -200,7 +206,9 @@ void loop() {
                 Serial.println(str);
 
                 // Reset device
-                if (str.indexOf("GET /reset")) { resetFunc(); }
+                //if (str.indexOf("GET /reset")) { resetFunc(); }
+
+                if (str.indexOf("/saveConfig")) { webSaveConfig(str); }
                 
                 webConfiguration(HTTPclient, mqttClient);
 
