@@ -317,7 +317,39 @@ void connectMqttServer()
 void messageReceived(String &topic, String &payload)
 {
     Serial.println("incoming: " + topic + " - " + payload);
+
+    // New value for Manual control, read and save it
+    if (topic.indexOf("manCntrl/set") > 0) { man_control = (payload == "true") ? true : false; }
+    // New value for hysteresys temperature, read and save it
+    if (topic.indexOf("hysteresis/set") > 0) { temp_hyst = payload.toFloat(); }
+    // New value for temperature setpoint
+    if (topic.indexOf("setpoint/set") > 0) { temp_sp = payload.toFloat(); }
+    // New value for manual value
+    if (topic.indexOf("/resistence/set") > 0) { man_value = (payload == "true") ? true : false; }
+
 }
+
+
+void manualactivation(){
+  val = digitalRead(pbuttonPin);
+  if(val == HIGH && lightON == LOW){
+    pushed = 1-pushed;
+    delay(100);
+  }    
+
+  lightON = val;
+      if(pushed == HIGH){
+        Serial.println("Light ON");
+        digitalWrite(relayPin, LOW); 
+       
+      }else{
+        Serial.println("Light OFF");
+        digitalWrite(relayPin, HIGH);
+   
+      }     
+
+  delay(100);
+  }
 
 void setup()
 {
@@ -404,14 +436,9 @@ void loop() {
         String resistence_st = "false";
         String man_control_str = "false";
 
-        if (digitalRead(1) == HIGH)
-        {
-            resistence_st = "true";
-        }
-        if (man_control)
-        {
-            man_control_str = "true";
-        }
+        if (digitalRead(1) == HIGH) { resistence_st = "true"; }
+        if (man_control) { man_control_str = "true"; }
+
         if (mqttClient.connected())
         {
             //mqttClient.publish("homie/mkr1000/waterHeater/temperature", String(temperature));
