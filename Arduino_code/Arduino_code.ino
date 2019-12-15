@@ -194,9 +194,9 @@ void setRTCwithNTP()
     do
     {
         Serial.print("getting time...");
-        //        epoch = WiFi.getTime();
+        epoch = WiFi.getTime();
         //Workaround for issue with getTime returning 0
-        epoch = 1576361581;
+        //epoch = 1576361581;
         delay(1000);
         Serial.println("done");
         numberOfTries++;
