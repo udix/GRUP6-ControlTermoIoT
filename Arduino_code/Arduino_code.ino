@@ -29,6 +29,8 @@ FlashStorage(myFS, MQTTSvr_cred);
 
 MQTTSvr_cred myMQTTSvr;
 
+float resistence_hrs;
+
 // vars for water heater control
 float temp_sp = 0;
 float temp_hyst = 0;
@@ -459,28 +461,33 @@ void loop() {
     }
 
     delay(1);
-
     HTTPclient.stop();
-    
+
+    String resistence_st = "false";
+
+    //Calculate hours
+    if (digitalRead(1) == HIGH) { 
+        resistence_st = "true";
+        resistence_hrs += 0.10;
+    }
+
     // publish a message roughly every 10 seconds.
     if (millis() - lastMillis > 10000) {
       
         // read temperature sensor value
         temperature = ENV.readTemperature();
 
-        String resistence_st = "false";
         String man_control_str = "false";
 
-        if (digitalRead(1) == HIGH) { resistence_st = "true"; }
         if (man_control) { man_control_str = "true"; }
 
         if (mqttClient.connected())
         {
-            //mqttClient.publish("homie/mkr1000/waterHeater/temperature", String(temperature));
             mqttClient.publish("homie/mkr1000/waterHeater/resistence", resistence_st);
             mqttClient.publish("homie/mkr1000/waterHeater/setpoint", String(temp_sp));
             mqttClient.publish("homie/mkr1000/waterHeater/hysteresis", String(temp_hyst));
             mqttClient.publish("homie/mkr1000/waterHeater/manCntrl", man_control_str);
+            mqttClient.publish("homie/mkr1000/waterHeater/hours", String(resistence_hrs));
         }
         saveMeasureWithTimeStamp(temperature);
 
