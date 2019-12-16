@@ -182,7 +182,7 @@ void readCacheAndSend()
                         }
                         else
                         {
-                            Serial.println('Discarding data');
+                            Serial.println("Discarding data");
                         }
                     }
                     else
