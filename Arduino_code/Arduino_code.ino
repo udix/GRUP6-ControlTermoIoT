@@ -9,6 +9,8 @@
 #include "arduino_secrets.h"
 #include <SD.h>
 #include <ArduinoJson.h>
+#include <WiFiUdp.h>
+#include <SPI.h>
 
 char ssid[] = SECRET_SSID;
 char pass[] = SECRET_PASS;
@@ -22,7 +24,7 @@ char mqttPass[] = SECRET_MQTT_PASS;
 unsigned long lastMillis = 0;
 unsigned long lastMillisFiles = 0;
 int MAX_FILES_TO_READ = 5;
-
+unsigned long ONEDAY = 24*60*60;
 // vars for water heater control
 float temp_sp = 0;
 float temp_hyst = 0;
@@ -31,13 +33,21 @@ bool man_value = false;
 float temperature = 0;
 
 //vars for relay push button
-int pbuttonPin = 2;// connect output to push button
-int relayPin = 10;// Connected to relay (LED)
-int val = 0; // push value from pin 2
-int lightON = 0;//light status
-int pushed = 0;//push status
+int pbuttonPin = 2; // connect output to push button
+int relayPin = 10;  // Connected to relay (LED)
+int val = 0;        // push value from pin 2
+int lightON = 0;    //light status
+int pushed = 0;     //push status
 
-WiFiSSLClient net;
+unsigned int localPort = 2390; // local port to listen for UDP packets
+
+IPAddress timeServer(129, 6, 15, 28); // time.nist.gov NTP server
+const int NTP_PACKET_SIZE = 48;       // NTP time stamp is in the first 48 bytes of the message
+byte packetBuffer[NTP_PACKET_SIZE];   //buffer to hold incoming and outgoing packets
+// A UDP instance to let us send and receive packets over UDP
+WiFiUDP Udp;
+
+WiFiClient net;
 MQTTClient mqttClient;
 RTCZero rtc; // create an RTC object
 
@@ -92,7 +102,6 @@ void sendTemperature(String strEpoch, String strTemperature)
     char JSONmessageBuffer[100];
     serializeJson(doc, JSONmessageBuffer);
     mqttClient.publish("homie/mkr1000/waterHeater/temperature", JSONmessageBuffer);
-
 }
 
 void writeToSDCard(String dataString, String fileName)
@@ -167,7 +176,16 @@ void readCacheAndSend()
                     {
                         temperature = String(buffer);
                         buffer = "";
-                        sendTemperature(epoch, temperature);
+                        unsigned long now = rtc.getEpoch();
+                        unsigned long epoch_int = epoch.toInt();
+                        if (now-epoch_int<ONEDAY){
+                            sendTemperature(epoch, temperature);
+                        }
+                        else
+                        {
+                            Serial.println('Discarding data');
+                        }
+                        
                     }
                     else
                     {
@@ -187,6 +205,91 @@ void readCacheAndSend()
     //mqttClient.disconnect();
 }
 
+// send an NTP request to the time server at the given address
+unsigned long sendNTPpacket(IPAddress &address)
+{
+    //Serial.println("1");
+    // set all bytes in the buffer to 0
+    memset(packetBuffer, 0, NTP_PACKET_SIZE);
+    // Initialize values needed to form NTP request
+    // (see URL above for details on the packets)
+    //Serial.println("2");
+    packetBuffer[0] = 0b11100011; // LI, Version, Mode
+    packetBuffer[1] = 0;          // Stratum, or type of clock
+    packetBuffer[2] = 6;          // Polling Interval
+    packetBuffer[3] = 0xEC;       // Peer Clock Precision
+    // 8 bytes of zero for Root Delay & Root Dispersion
+    packetBuffer[12] = 49;
+    packetBuffer[13] = 0x4E;
+    packetBuffer[14] = 49;
+    packetBuffer[15] = 52;
+
+    //Serial.println("3");
+
+    // all NTP fields have been given values, now
+    // you can send a packet requesting a timestamp:
+    Udp.beginPacket(address, 123); //NTP requests are to port 123
+    //Serial.println("4");
+    Udp.write(packetBuffer, NTP_PACKET_SIZE);
+    //Serial.println("5");
+    Udp.endPacket();
+    //Serial.println("6");
+}
+
+void setRTCwithNTP_v2()
+{
+    Serial.println ("Setting time with UDP");
+    sendNTPpacket(timeServer); // send an NTP packet to a time server
+    // wait to see if a reply is available
+    delay(1000);
+    if (Udp.parsePacket())
+    {
+        Serial.println("packet received");
+        // We've received a packet, read the data from it
+        Udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
+
+        //the timestamp starts at byte 40 of the received packet and is four bytes,
+        // or two words, long. First, esxtract the two words:
+
+        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+        // combine the four bytes (two words) into a long integer
+        // this is NTP time (seconds since Jan 1 1900):
+        unsigned long secsSince1900 = highWord << 16 | lowWord;
+        Serial.print("Seconds since Jan 1 1900 = ");
+        Serial.println(secsSince1900);
+
+        // now convert NTP time into everyday time:
+        Serial.print("Unix time = ");
+        // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
+        const unsigned long seventyYears = 2208988800UL;
+        // subtract seventy years:
+        unsigned long epoch = secsSince1900 - seventyYears;
+        // print Unix time:
+        Serial.println(epoch);
+
+        // print the hour, minute and second:
+        Serial.print("The UTC time is ");      // UTC is the time at Greenwich Meridian (GMT)
+        Serial.print((epoch % 86400L) / 3600); // print the hour (86400 equals secs per day)
+        Serial.print(':');
+        if (((epoch % 3600) / 60) < 10)
+        {
+            // In the first 10 minutes of each hour, we'll want a leading '0'
+            Serial.print('0');
+        }
+        Serial.print((epoch % 3600) / 60); // print the minute (3600 equals secs per minute)
+        Serial.print(':');
+        if ((epoch % 60) < 10)
+        {
+            // In the first 10 seconds of each minute, we'll want a leading '0'
+            Serial.print('0');
+        }
+        Serial.println(epoch % 60); // print the second
+        rtc.setEpoch(epoch);
+        rtc.setHours(rtc.getHours() + GMT);
+    }
+}
+
 void setRTCwithNTP()
 {
     unsigned long epoch;
@@ -199,16 +302,11 @@ void setRTCwithNTP()
         Serial.println("done");
         numberOfTries++;
     } while ((epoch == 0) && (numberOfTries < maxTries));
-    //Fix for the issue with getTime
-    if (epoch == 0)
-    {
-                epoch = 1576425269;
-    }
+
     if (numberOfTries > maxTries)
     {
         Serial.print("NTP unreachable!!");
         WiFi.disconnect();
-
     }
     else
     {
@@ -323,37 +421,50 @@ void messageReceived(String &topic, String &payload)
     Serial.println("incoming: " + topic + " - " + payload);
 
     // New value for Manual control, read and save it
-    if (topic.indexOf("manCntrl/set") > 0) { man_control = (payload == "true") ? true : false; }
+    if (topic.indexOf("manCntrl/set") > 0)
+    {
+        man_control = (payload == "true") ? true : false;
+    }
     // New value for hysteresys temperature, read and save it
-    if (topic.indexOf("hysteresis/set") > 0) { temp_hyst = payload.toFloat(); }
+    if (topic.indexOf("hysteresis/set") > 0)
+    {
+        temp_hyst = payload.toFloat();
+    }
     // New value for temperature setpoint
-    if (topic.indexOf("setpoint/set") > 0) { temp_sp = payload.toFloat(); }
+    if (topic.indexOf("setpoint/set") > 0)
+    {
+        temp_sp = payload.toFloat();
+    }
     // New value for manual value
-    if (topic.indexOf("/resistence/set") > 0) { man_value = (payload == "true") ? true : false; }
-
+    if (topic.indexOf("/resistence/set") > 0)
+    {
+        man_value = (payload == "true") ? true : false;
+    }
 }
 
+void manualactivation()
+{
+    val = digitalRead(pbuttonPin);
+    if (val == HIGH && lightON == LOW)
+    {
+        pushed = 1 - pushed;
+        delay(100);
+    }
 
-void manualactivation(){
-  val = digitalRead(pbuttonPin);
-  if(val == HIGH && lightON == LOW){
-    pushed = 1-pushed;
-    delay(100);
-  }    
-
-  lightON = val;
-      if(pushed == HIGH){
+    lightON = val;
+    if (pushed == HIGH)
+    {
         //Serial.println("Light ON");
-        digitalWrite(relayPin, LOW); 
-       
-      }else{
+        digitalWrite(relayPin, LOW);
+    }
+    else
+    {
         //Serial.println("Light OFF");
         digitalWrite(relayPin, HIGH);
-   
-      }     
+    }
 
-  delay(100);
-  }
+    delay(100);
+}
 
 void setup()
 {
@@ -404,9 +515,10 @@ void setup()
 
     rtc.begin(); // initialize the RTC library
     Watchdog.reset();
+    //Udp.begin(localPort);
     setRTCwithNTP(); // set the RTC time/date using epoch from NTP
-    printTime();     // print the current time
-    printDate();     // print the current date
+    printTime();        // print the current time
+    printDate();        // print the current date
     Watchdog.reset();
     initializeSDCard();
 
@@ -415,24 +527,32 @@ void setup()
     mqttClient.onMessage(messageReceived);
     connectMqttServer();
     Watchdog.reset();
-
 }
 
+void loop()
+{
+    //setRTCwithNTP_v2(); // set the RTC time/date using epoch from NTP
+    //Watchdog.reset();
 
-void loop() {
     //call manual push button relay
     manualactivation();
 
-    if (!man_control) {
-        if (temperature > temp_sp + temp_hyst) {
+    if (!man_control)
+    {
+        if (temperature > temp_sp + temp_hyst)
+        {
             digitalWrite(1, false);
-        } else if (temperature < temp_sp - temp_hyst) {
+        }
+        else if (temperature < temp_sp - temp_hyst)
+        {
             digitalWrite(1, true);
-        }       
-    } else {
+        }
+    }
+    else
+    {
         digitalWrite(1, man_value);
     }
-    
+
     // MQTT client:
     mqttClient.loop();
 
@@ -440,7 +560,7 @@ void loop() {
     {
         connectMqttServer();
     }
-    
+
     // publish a message roughly every second.
     if (millis() - lastMillis > 1000)
     {
@@ -450,8 +570,14 @@ void loop() {
         String resistence_st = "false";
         String man_control_str = "false";
 
-        if (digitalRead(1) == HIGH) { resistence_st = "true"; }
-        if (man_control) { man_control_str = "true"; }
+        if (digitalRead(1) == HIGH)
+        {
+            resistence_st = "true";
+        }
+        if (man_control)
+        {
+            man_control_str = "true";
+        }
 
         if (mqttClient.connected())
         {
