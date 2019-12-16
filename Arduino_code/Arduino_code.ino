@@ -24,6 +24,7 @@ char mqttClientId[] = "MKR1000";
 unsigned long lastMillis = 0;
 unsigned long lastMillisFiles = 0;
 int MAX_FILES_TO_READ = 5;
+unsigned long ONEDAY = 24*60*60;
 
 FlashStorage(myFS, MQTTSvr_cred);
 
@@ -174,7 +175,15 @@ void readCacheAndSend()
                     {
                         temperature = String(buffer);
                         buffer = "";
-                        sendTemperature(epoch, temperature);
+                        unsigned long now = rtc.getEpoch();
+                        unsigned long epoch_int = epoch.toInt();
+                        if (now-epoch_int<ONEDAY){
+                            sendTemperature(epoch, temperature);
+                        }
+                        else
+                        {
+                            Serial.println('Discarding data');
+                        }
                     }
                     else
                     {
