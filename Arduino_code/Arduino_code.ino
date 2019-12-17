@@ -10,6 +10,8 @@
 #include <FlashAsEEPROM.h>
 #include <FlashStorage.h>
 
+#include <WiFiMDNSResponder.h>
+
 typedef struct {
     boolean valid;
     char mqttHost[50];
@@ -25,6 +27,11 @@ unsigned long lastMillis = 0;
 unsigned long lastMillisFiles = 0;
 int MAX_FILES_TO_READ = 5;
 unsigned long ONEDAY = 24*60*60;
+
+char mdnsName[] = "Grup6IoT";
+
+// Create a MDNS responder to listen and respond to MDNS name requests.
+WiFiMDNSResponder mdnsResponder;
 
 FlashStorage(myFS, MQTTSvr_cred);
 
@@ -409,6 +416,18 @@ void setup()
 
     printWiFiStatus(); // you're connected now, so print out the status:
 
+    // Setup the MDNS responder to listen to the configured name.
+    // NOTE: You _must_ call this _after_ connecting to the WiFi network and
+    // being assigned an IP address.
+    if (!mdnsResponder.begin(mdnsName)) {
+        Serial.println("Failed to start MDNS responder!");
+        while(1);
+    }
+
+    Serial.print("Server listening at http://");
+    Serial.print(mdnsName);
+    Serial.println(".local/");
+
     rtc.begin(); // initialize the RTC library
     Watchdog.reset();
     setRTCwithNTP(); // set the RTC time/date using epoch from NTP
@@ -430,6 +449,8 @@ void loop() {
 
     //connect to MQTT server if it is disconnected
     connectMqttServer();
+
+    mdnsResponder.poll();
     
     // MQTT client:
     mqttClient.loop();
